@@ -1,0 +1,69 @@
+# Changelog · Radar de Vagas
+
+Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/). **Este arquivo é a fonte de verdade do que entrou de fato.** Planos e checkboxes de outros documentos podem estar desatualizados; este não pode.
+
+## [Não lançado]
+
+### Adicionado
+
+- **Comando `setup`.** `npm run setup` (ou `node bin/radar.mjs setup`) confere Node 20+, cria a pasta de dados com a busca de exemplo, procura Claude Code e Codex no PATH, informa se o agendamento existe no sistema e imprime o próximo passo conforme o que encontrou (onboarding no agente, caminho manual sem agente, ou coletar quando perfil e busca já existem). Pode ser repetido; não altera arquivo existente. Substitui a linha de `node --input-type=module -e` do README.
+- **Agendamento no Linux.** `schedule on/off/status` usa timer do systemd de usuário (`radar-de-vagas.timer` e `.service` na pasta de configuração do usuário), com primeira rodada um minuto depois de ligar e repetição pelo intervalo escolhido. Sem systemd de usuário (WSL, contêiner) o comando explica que só o modo manual está disponível e não deixa unidades para trás. Coberto por testes com `systemctl` injetado; **não validado em máquina Linux real**.
+
+- **Fontes Sólides e InfoJobs** (desligadas de fábrica), registro de cada rodada em `rodadas.json` e trava da coleta (`coleta.lock`: uma segunda coleta simultânea sai com código 75).
+- **Filtro configurado pela pessoa** (local, modelo e título), aplicado na leitura: a vaga cortada continua visível com o motivo; `pending` deixa as cortadas fora da triagem.
+- **Página do dia**: vagas da última rodada, mostradas e cortadas por motivo, e aviso de empresa acompanhada sem vagas.
+- **Preparo da candidatura sem rede e sem envio**: `selecionar`, `verificar-variantes`, `preparar`, `conferir-pacote` e `contar-gupy`; ponte de comando externo para o gerador de CV da pessoa; veracidade bloqueante frase a frase contra a base de fatos; aprovação de frases e bases só pela pessoa (`aprovar-frase`, `aprovar-base`, no terminal).
+- **Retorno e indicadores**: `retorno <id> <valor>` e taxa por fonte, estrela e variante na página.
+- **Painel de revisão do CV** (`painel-entrada`, `painel-gravar` e a skill `painel-de-revisao`): sete revisores criticam o CV do pacote num esquema fechado, sem reescrever o CV. Adaptado de `/hiring-panel`, de Alex Chen (MIT); aviso em `THIRD_PARTY_NOTICES.md`.
+- **Aprovação pelo Telegram** (`configurar-telegram`, `pedir-aprovacao` com `--previa`, `receber-aprovacao`, `avisar-vaga`): a pessoa aprova pelo celular respondendo ao lote; só vale mensagem dela, em conversa privada, respondendo ao lote que não mudou; a gravação continua a mesma do terminal.
+
+- **Onboarding com conexões opcionais**: filtro, preparo opcional, LinkedIn com a conta da pessoa (em construção, com aviso de risco e "aceito") e Telegram por `configurar-telegram` no terminal dela.
+- **Versão pública preparada, sem publicar**: README com "O que faz" e "O que não faz", créditos ao upstream, ao painel e ao servidor MCP do LinkedIn (ferramenta externa), `CLAUDE.md` público só com a parte do upstream, `.gitattributes` com fim de linha LF (os 3 testes de fim de linha passam no Windows em clone novo), gate do histórico e exportação para repo novo.
+
+### Corrigido
+
+- **Trava do estado no Windows**: criar `estado.lock` logo depois de outro processo apagá-lo podia dar EPERM e falhar na hora (marcação pela página ou coleta agendada perdiam a vez); agora espera como trava ocupada. Trava velha que não pode ser apagada respeita o prazo de 5 s em vez de girar sem fim.
+
+### Alterado
+
+- **README reescrito em torno de um Começo rápido.** Três passos: `npm run setup`, onboarding no agente, coletar e abrir. O caminho de editar `busca.json` na mão virou seção secundária, a instalação do plugin virou opcional e entrou uma tabela de problemas comuns. Linux passa a constar como sistema suportado.
+- **README: caminho sem terminal.** Seção nova explicando o uso pela aba Code do app do Claude e pelo app do Codex, com o pedido pronto para colar. Deixa claro que o chat comum não serve, que Node e Git continuam necessários e que o caminho **não foi validado de ponta a ponta**.
+- **Referência movida para `docs/referencia.md`.** Comandos, campos do `busca.json`, detalhes de coleta, agendamento por sistema e pasta de dados.
+- **Skill de onboarding.** Começa por `setup`, não oferece agenda onde ela não existe, não insiste se `schedule on` falhar e termina com os próximos passos exatos.
+- **`CLAUDE.md`.** Pedido de uso segue a skill da tabela de `AGENTS.md`, sem mexer em código.
+
+## [0.1.0] - 2026-10-02
+
+### Adicionado
+
+- **Infraestrutura de código das F2 a F5.** Comandos `paths`, `pending`, `show`, `triage`, `discards`, `track` e `triage-run`; JSON nos comandos de leitura, descrições inteiras, aliases, setters por dono e erros de uso com saída 2. Busca aceita teto de triagem opcional (padrão 30) e agente opcional (`claude` ou `codex`). Nenhum julgamento foi movido das skills para código.
+- **Agendamento.** `schedule on/off/status`, launchd no Mac com `StartInterval` e `RunAtLoad`, schtasks no Windows com XML UTF-16 e `StartWhenAvailable`; coleta seguida de triagem e log dentro da pasta de dados. Geradores puros e processos injetáveis, sem instalar tarefa real nos testes. Validação nativa em Mac e Windows permanece pendente.
+- **Acompanhamento na tabela existente.** Ordenação por estrelas e data; edição de etapa, próximo passo e notas nas vagas com inscrevi. Rota `POST /api/jobs/:id/tracking` usa `setTracking` e as mesmas proteções de origem, Host e corpo da marcação. Testes de comandos, agendamento e rota usam apenas dados fictícios em pastas temporárias.
+
+- **T1.6 · Página e comando de abertura.** Radar local com tabela, inscrevi e descarte com motivo persistidos. `node bin/radar.mjs open` ou `npm run open` inicia o servidor, imprime o endereço e chama o navegador padrão no Mac, Windows e Linux, sem dependências. Ctrl+C encerra o servidor; comando sem argumento mostra ajuda em português. Despachante testado com abridor injetado, servidor real temporário e sinais de encerramento. Abridores de Windows e Linux verificados por injeção, sem validação em máquina real.
+- **T1.8 · Instalação e primeiro uso.** README com Node 20+, clone, preparação da busca, primeira coleta, LinkedIn opcional e risco de bloqueio, página, marcações, dados e testes. Passo a passo do Mac validado em cópia limpa e dados temporários; Windows pendente de validação em máquina real.
+
+- **T1.5 · Coleta, estado e deduplicação.** `src/collect.mjs` executa fontes habilitadas com contexto e identidades conhecidas (incluindo aliases), isola falhas e registra também rodadas vazias pelo módulo de estado. `node bin/radar.mjs collect` (ou `npm run collect`) mostra contagens e avisos em português; retorna sucesso quando ao menos uma fonte executa, inclusive com erro da fonte. Fontes por empresa sem empresas configuradas não executam. Contagens de vagas vistas representam as vagas devolvidas pelas fontes; novas contam entradas criadas, sem aliases. Testes com fontes falsas e pastas temporárias verificam repetição, preservação de marcações, fusão entre fontes e o comando, sem rede.
+
+- **T1.3 e T1.4 · Seis fontes de vagas.** Gupy e LinkedIn por termo; Greenhouse, Lever, Ashby e InHire pelas listas de empresas de `busca.json`. Descrições completas, detalhe quando necessário, validação antes do retorno e avisos em português para falhas parciais. LinkedIn desligado de fábrica, intervalo de um segundo e interrupção ao sinal de bloqueio. Helper de rede compartilhado com identificação e prazo incluindo o corpo da resposta. Testes sem rede com respostas fictícias e `scripts/smoke-sources.mjs` para consultas reais sem persistência. Contrato e limites documentados em `docs/contrato-de-fonte.md`.
+
+- **T1.2 · Pasta de dados, busca e estado local.** `src/data-dir.mjs` resolve `~/.radar-de-vagas/` ou `RADAR_DATA_DIR`, impede escrita dentro do repositório e cria `busca.json` fictício sem substituir edições; valida a busca em português, com empresas por ATS e LinkedIn desligado. `src/state.mjs` implementa o envelope da decisão 0003, funções por dono, releitura sob trava entre processos e escrita atômica. Preserva marcações, triagens e acompanhamento; funde por link de inscrição, prioriza fonte por empresa e mantém aliases e chave estável. Estado ausente é vazio; corrupção é acusada sem apagar o arquivo. Contratos e limitações em `docs/estado-local.md`. Testes usam apenas pastas temporárias, incluindo concorrência entre processos. Sem validação em Windows nesta entrega.
+- **T1.7 · Guarda de privacidade.** `scripts/check-privacy.mjs` falha se houver e-mail, telefone, CPF, CNPJ ou caminho de usuário no que está preparado para commit ou já rastreado. Lê o conteúdo do índice do git, inclusive o arquivo de exceções `.privacy-allow`. Roda no hook `pre-commit` (`git config core.hooksPath .githooks`) e no GitHub. Aceita uma lista privada de termos fora do repositório. 20 testes; verificada em clone com commit real barrado. Não validada em Windows nem em execução real no GitHub.
+- **T1.1 · Formato da vaga e contrato de fonte.** `src/job.mjs` (`makeId`, `stripHtml`, `validateJob`, `dedupKey`), `src/sources/index.mjs` (registro e `validateSource`) e o guia `docs/contrato-de-fonte.md`. `stripHtml` segue a regra "na dúvida, preserva o texto" e foi comparado com um parser de navegador em 2.500 entradas malformadas: nenhuma perda de texto além das que o navegador também faria. Um segundo teste independente achou mais três perdas (caractere que muda de tamanho em minúsculas, comentário vazio e atributo com espaço em volta do "="), corrigidas. 62 testes.
+- **Decisão 0003.** Estado local em blocos com um dono cada, identidade da vaga e regra conservadora de fusão entre fontes.
+
+- **Documentação inicial.** Plano do produto, arquitetura planejada, roadmap com as fases F0 a F7 e as tarefas da F1. Nenhum código de produto.
+- **Plano aprovado.** Fases F0 a F8, com a F5 dedicada a acompanhamento das candidaturas, currículo por vaga e munição de entrevista. Decisões registradas no `ROADMAP.md`.
+
+### Corrigido
+
+- **Correções das F2 a F5.** `track` preserva campos omitidos sob trava e oferece `--clear-next` e `--clear-notes`; opções aceitam valores literais iniciados por `--`, separados ou com `=`. Skills de acompanhamento e entrevista atualizadas.
+- Instalação do marketplace usa `./`. Agenda valida caminhos absolutos dos executáveis antes de substituir a tarefa, guarda PATH e propaga `RADAR_DATA_DIR`. Log acima de 1 MiB retém cerca de 256 KiB no mesmo arquivo. Trava com PID impede sobreposição e recupera processos encerrados.
+- Identificador visível e botão de cópia em cada linha, inclusive após inscrevi. Regressões sem rede com dados fictícios em pastas temporárias e agendadores simulados.
+
+- **Correções finais da F1.** Idade aplicada na listagem pelo helper das seis fontes, preservando datas desconhecidas e sem corte local por título ou modelo. Até quatro detalhes simultâneos por fonte; LinkedIn permanece em série com intervalo. `detalhesNovosPorFonte` (150) limita candidatos novos tentados, com contagem dos adiados sem marcá-los como vistos. `prazoFonteSegundos` (600) limita a execução completa, inclusive de fontes injetadas que nunca resolvem; falha registrada não impede a fonte seguinte.
+- Progresso em português durante a coleta e estado salvo por fonte. Ctrl+C/SIGTERM cancela requisições e aguarda limpeza de escrita atômica, trava e temporários, preservando fontes concluídas.
+- IDs reencontrados atualizam `lastSeenAt`, inclusive por alias, sem novo detalhe ou alteração de marcação, triagem e acompanhamento. Contagem de novas calculada dentro da trava evita dupla contagem entre coletas simultâneas.
+- Página exige uma leitura iniciada após salvar a marcação, mesmo com “Atualizar vagas” anterior pendente ou falhando; situação e ação de desfazer refletem o disco. Regressões sem rede cobrem os limites, concorrência, reencontros, prazo, progresso e Ctrl+C real durante escrita.
+
+- Gupy continua após páginas completas mesmo quando `total` informa apenas o lote; preserva proteção contra repetição e aviso de limite opcional. LinkedIn aceita formulários opcionais de login quando o conteúdo público está acessível. Extração da descrição ignora tags aparentes em comentários e scripts. Regressões sem rede usam somente dados fictícios.

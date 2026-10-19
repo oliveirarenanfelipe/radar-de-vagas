@@ -1,0 +1,23 @@
+node_modules/
+.env
+.aiox/
+graphify-out/
+
+# Dados de quem usa nunca entram no repositório.
+# Eles vivem em ~/.radar-de-vagas/, mas estas regras cobrem o descuido.
+.radar-de-vagas/
+perfil.md
+busca.json
+regua.md
+estado.json
+empresas.json
+*.pdf
+*.docx
+raw.json
+# Token do bot do Telegram (T23): só na pasta de dados, nunca no repositório.
+telegram.json
+
+.env.*
+.DS_Store
+Thumbs.db
+*.log
