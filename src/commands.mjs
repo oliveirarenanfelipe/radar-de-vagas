@@ -1,4 +1,6 @@
+import { execFile } from 'node:child_process';
 import { createHash, randomInt } from 'node:crypto';
+import { promisify } from 'node:util';
 import { mkdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -80,7 +82,19 @@ function terminal(stdout) {
       leitor._writeToOutput = () => {};
       try { return await leitor.question(''); } finally { leitor.close(); process.stdout.write('\n'); }
     },
+    // Enter vazio no token: lê a área de transferência da própria máquina. Falha vira texto vazio, nunca erro.
+    lerAreaDeTransferencia: () => lerAreaDeTransferencia(),
   };
+}
+
+async function lerAreaDeTransferencia({ platform = process.platform, run = promisify(execFile) } = {}) {
+  const tentativas = platform === 'win32' ? [['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-Clipboard -Raw']]]
+    : platform === 'darwin' ? [['pbpaste', []]]
+      : [['wl-paste', ['--no-newline']], ['xclip', ['-selection', 'clipboard', '-o']], ['xsel', ['--clipboard', '--output']]];
+  for (const [arquivo, argumentos] of tentativas) {
+    try { return (await run(arquivo, argumentos, { windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024 })).stdout; } catch {}
+  }
+  return '';
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -157,7 +171,7 @@ async function pedirAprovacao(args, ctx) {
   if (previa) {
     for (const { lote, documento } of lotes) {
       stdout(`--- Lote ${lote.loteId} (${lote.tipo === 'frases' ? 'frases' : 'base'}): ${lote.itens.length} ${lote.itens.length === 1 ? 'item' : 'itens'}`);
-      if (documento) stdout(`Documento retrato-${lote.itens[0].base}.txt: ${documento.split('\n').filter(Boolean).length - 1} itens do retrato. Legenda:`);
+      if (documento) stdout(`Documento retrato-${lote.itens[0].base}.txt: ${lote.itens[0].itensNoRetrato} itens do retrato. Legenda:`);
       stdout(textoDoLote(lote));
     }
     stdout(`Prévia: ${lotes.length} ${lotes.length === 1 ? 'lote' : 'lotes'}; nada foi enviado nem gravado.`);
@@ -209,23 +223,36 @@ async function receberAprovacao(args, ctx) {
   let gravadas = 0;
   for (const update of atualizacoes) {
     const ignorar = async motivo => {
+      // A mensagem respondida fica no registro: sem ela, uma aprovação descartada não tem como ser explicada.
+      const respondeuA = update.message?.reply_to_message?.message_id;
+      const comAlvo = Number.isSafeInteger(respondeuA) ? { respondeuA } : {};
       const doc = (await lerJsonOuNada(caminhoIgnorados)) ?? { versao: 1, ignorados: [] };
-      doc.ignorados = [...(Array.isArray(doc.ignorados) ? doc.ignorados : []), { update_id: update.update_id, motivo, em: new Date().toISOString() }].slice(-500);
+      doc.ignorados = [...(Array.isArray(doc.ignorados) ? doc.ignorados : []), { update_id: update.update_id, motivo, ...comAlvo, em: new Date().toISOString() }].slice(-500);
       await mkdir(pasta, { recursive: true });
       await gravarJson(caminhoIgnorados, doc);
-      stdout(`Atualização ${update.update_id} ignorada: ${motivo}.`);
+      stdout(`Atualização ${update.update_id} ignorada: ${motivo}${comAlvo.respondeuA ? ` (resposta à mensagem ${respondeuA})` : ''}.`);
     };
     const filtro = filtrarAtualizacao(update, { chatId: config.chatId, botId: bot.id });
     if (filtro.motivo) await ignorar(filtro.motivo);
     else {
       const { mensagem } = filtro;
+      // Toda mensagem da pessoa ganha um aviso de volta: sem ele, ela não sabe se a aprovação valeu.
+      // O aviso nunca repete o texto dela; falha no aviso não desfaz o que já foi gravado.
+      const avisar = async texto => {
+        try { await cliente.enviarTexto(config.chatId, texto, { responderA: mensagem.message_id }); }
+        catch (error) { stdout(`Aviso ao Telegram não saiu (${error.tipo ?? 'erro'}); o resultado acima vale.`); }
+      };
+      const naoValeu = async motivo => {
+        await ignorar(motivo);
+        await avisar(`Não valeu, nada foi gravado: ${motivo}. Responda (deslizando para o lado) à mensagem do lote.`);
+      };
       const achados = (await lotesPorMensagem(dataDir)).get(mensagem.reply_to_message.message_id) ?? [];
-      if (!achados.length) await ignorar(NAO_E_LOTE);
-      else if (achados.length > 1) await ignorar(LOTE_MUDOU);
+      if (!achados.length) await naoValeu(NAO_E_LOTE);
+      else if (achados.length > 1) await naoValeu(LOTE_MUDOU);
       else {
         const { lote, caminho } = achados[0];
         const resposta = lerResposta(mensagem.text, Array.isArray(lote?.itens) ? lote.itens.length : 0);
-        if (!resposta.ok) await ignorar(`resposta inválida, nada aplicado: ${resposta.motivo}`);
+        if (!resposta.ok) await naoValeu(`resposta inválida, nada aplicado: ${resposta.motivo}`);
         else {
           let retratoAtual = null, bytesBaixados = null, semBase = false;
           if (lote.tipo === 'base' && typeof lote.itens?.[0]?.base === 'string') {
@@ -238,14 +265,19 @@ async function receberAprovacao(args, ctx) {
           }
           const resultado = aplicarRespostas({ lote, resposta, mensagem, chatId: config.chatId, docs: await lerDocsDeAprovacao(dataDir),
             retratoAtual, bytesBaixados });
-          if (resultado.jaAplicada) stdout(`Atualização ${update.update_id}: resposta já aplicada antes; nada duplicado.`);
-          else if (!resultado.ok) await ignorar(resultado.motivo);
+          if (resultado.jaAplicada) {
+            stdout(`Atualização ${update.update_id}: resposta já aplicada antes; nada duplicado.`);
+            await avisar(`Já estava valendo: lote ${lote.loteId}, nada mudou.`);
+          } else if (!resultado.ok) await naoValeu(resultado.motivo);
           else {
             await gravarAplicacao(dataDir, resultado, caminho);
             gravadas++;
+            const itens = resultado.itens;
+            const faltam = lote.itens.length - Object.keys(resultado.lote.decisoes).length;
             stdout(resposta.decisao === 'recusada'
-              ? `Lote ${lote.loteId}: item ${resposta.itens[0]} recusado pela pessoa; continua pendente.`
-              : `Lote ${lote.loteId}: aprovado pela pessoa ${resposta.itens.length === 1 ? 'o item' : 'os itens'} ${resposta.itens.join(', ')}.`);
+              ? `Lote ${lote.loteId}: item ${itens[0]} recusado pela pessoa; continua pendente.`
+              : `Lote ${lote.loteId}: aprovado pela pessoa ${itens.length === 1 ? 'o item' : 'os itens'} ${itens.join(', ')}.`);
+            await avisar(`Valeu: lote ${lote.loteId}, ${resposta.decisao === 'recusada' ? 'recusado' : 'aprovado'} ${itens.length === 1 ? 'o item' : 'os itens'} ${itens.join(', ')}. ${faltam ? `Faltam ${faltam} neste lote.` : 'Lote completo.'}`);
           }
         }
       }
@@ -323,8 +355,14 @@ async function configurarTelegram(args, ctx) {
   const io = ctx.io ?? terminal(ctx.stdout);
   if (!io?.isTTY) usage('configuração do Telegram só pela pessoa, no terminal: rode o comando você mesmo. Nada foi gravado.');
   const escrever = io.escrever ?? ctx.stdout;
-  const token = String(await (io.perguntarSegredo ?? io.perguntar)('Token do bot (do BotFather; não aparece na tela): ') ?? '').trim();
-  if (!tokenValido(token)) usage(`${CONFIGURE}: token fora do formato <número>:<30 ou mais caracteres>. Nada foi gravado.`);
+  let token = String(await (io.perguntarSegredo ?? io.perguntar)(
+    'Token do bot (do BotFather; não aparece na tela; Enter vazio usa o que está copiado): ') ?? '').trim();
+  const doClipboard = token === '' && typeof io.lerAreaDeTransferencia === 'function';
+  if (doClipboard) token = String(await io.lerAreaDeTransferencia() ?? '').trim();
+  if (!tokenValido(token)) {
+    usage(`${CONFIGURE}: token ${doClipboard ? 'copiado ' : ''}fora do formato <número>:<30 ou mais caracteres>. Nada foi gravado.`);
+  }
+  if (doClipboard) escrever('Token lido do que estava copiado.');
   const cliente = clienteTelegram(token, ctx);
   const { sleep, agora } = relogioTelegram(ctx);
   const bot = await cliente.quemSouEu();

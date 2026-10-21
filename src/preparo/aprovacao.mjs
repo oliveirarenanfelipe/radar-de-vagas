@@ -137,7 +137,6 @@ export function formaAscii(texto) {
   return saida;
 }
 
-const comAscii = texto => (SO_ASCII_VISIVEL.test(texto) ? '' : ` ascii: "${formaAscii(texto)}"`);
 
 /**
  * sha256 dos campos fixados antes do envio: versao, tipo, loteId, chatId e itens. Fica fora o que só se conhece depois
@@ -182,9 +181,45 @@ export function textoDoLote(lote) {
 // Itens legíveis do retrato, pela situação contra nenhuma aprovação (pendente.acrescentados = itensDoRetrato).
 const itensDoRetrato = retrato => situacaoDaBase('', retrato, {}).pendente.acrescentados;
 
-/** Documento do lote de base: texto puro, o hash na 1ª linha, depois um item do retrato por linha, entre aspas. */
+// No documento, a forma ascii só aparece quando há algo além de ASCII visível e das letras acentuadas do português
+// (U+00C0–U+00FF, ª, º, ·, meia-risca e travessão): é o que denuncia letra de outro alfabeto parecida com a latina.
+// Controle e formato (Cc, Cf) já tornam a base não aprovável antes de chegar aqui.
+const SO_LATINO_LEGIVEL = /^[\x20-\x7eÀ-ÿªº·–—]*$/u;
+const linhaAscii = (texto, recuo) => (SO_LATINO_LEGIVEL.test(texto) ? [] : [`${recuo}ascii: "${formaAscii(texto)}"`]);
+const comLinhaAscii = (linha, recuo = '   ') => [linha, ...linhaAscii(linha, recuo)];
+
+/**
+ * Documento do lote de base: texto puro organizado como um currículo (experiências, formação, cursos, idiomas,
+ * complementos) e, no fim, a parte técnica que também entra no retrato (frases com sinal, configuração, proibidas e
+ * o hash). Mostra o retrato inteiro: o "aprovo" vale para os bytes deste documento.
+ */
 export function documentoDoRetrato(retrato) {
-  return `${[hashRetrato(retrato), ...itensDoRetrato(retrato).map(item => `"${item}"${comAscii(item)}`)].join('\n')}\n`;
+  const periodo = p => `${p.inicio} – ${p.fim}`;
+  // Só a exibição segue a data (mais recente primeiro); o retrato e o hash continuam na ordem canônica.
+  const porData = itens => [...itens].sort((a, b) => b.periodo.inicio.localeCompare(a.periodo.inicio));
+  const secao =(titulo, itens, linhasDoItem) => (itens.length ? ['', `${titulo} (${itens.length})`, ...itens.flatMap(linhasDoItem)] : []);
+  const linhas = [
+    'CURRÍCULO PARA APROVAR',
+    'É o que o radar poderá afirmar sobre você nas candidaturas. Confira cada item.',
+    ...secao('EXPERIÊNCIAS', porData(retrato.experiencias), (exp, i) => [
+      ...comLinhaAscii(`${i + 1}. ${exp.cargo} — ${exp.empresa}`),
+      ...comLinhaAscii(`   ${periodo(exp.periodo)} · ${exp.local}`),
+      ...(exp.aliases.length ? comLinhaAscii(`   também aparece como: ${exp.aliases.join('; ')}`) : []),
+    ]),
+    ...secao('FORMAÇÃO', porData(retrato.formacao), (item, i) => [
+      ...comLinhaAscii(`${i + 1}. ${item.titulo} — ${item.instituicao}`), ...comLinhaAscii(`   ${periodo(item.periodo)}`),
+    ]),
+    ...secao('CURSOS', retrato.cursos, curso => comLinhaAscii(`- ${curso}`, '  ')),
+    ...secao('IDIOMAS', retrato.idiomas, item => comLinhaAscii(`- ${item.idioma}: ${item.nivel}`, '  ')),
+    ...secao('COMPLEMENTOS QUE VOCÊ ACRESCENTOU', retrato.complementos, item => comLinhaAscii(`- ${jsonCanonico(item)}`, '  ')),
+    ...secao('FRASES DO CV COM NÚMERO, NOME OU DATA', retrato.unidadesComSinal, chaves => comLinhaAscii(`- ${chaves.join(' / ')}`, '  ')),
+    '', '────────────────────',
+    'PARTE TÉCNICA (não precisa ler; entra na aprovação para nada mudar sem você ver)',
+    '', ...comLinhaAscii(`Configuração do preparo: ${jsonCanonico(retrato.preparo)}`, ''),
+    `Lista de afirmações proibidas: sha256 ${retrato.proibidasSha256}`,
+    `Hash do retrato: ${hashRetrato(retrato)}`,
+  ];
+  return `${linhas.join('\n')}\n`;
 }
 
 /** Recusa nome de base fora de ^[A-Za-z0-9_-]+$ (o nome vai no caption). */
@@ -390,8 +425,8 @@ export async function lerDocsDeAprovacao(dataDir) {
  * reply_to_message.chat.id igual ao chatId configurado e ao do lote; texto do lote
  * igual byte a byte ao que o Telegram diz que a pessoa leu (text ou caption) e lote sem edit_date; itens ainda sem
  * decisão contra as pendentes (frase) ou contra o retrato atual (base); no lote de base, file_unique_id e bytes baixados.
- * Devolve { ok: false, motivo, jaAplicada? } ou { ok: true, lote, frasesAprovadas?, frasesPendentes?, basesAprovadas?,
- * basesPendentes?, gravados }.
+ * Devolve { ok: false, motivo, jaAplicada? } ou { ok: true, lote, itens (os aplicados agora), frasesAprovadas?,
+ * frasesPendentes?, basesAprovadas?, basesPendentes?, gravados }.
  */
 export function aplicarRespostas({ lote, resposta, mensagem, chatId, docs, retratoAtual = null, bytesBaixados = null }) {
   const recusa = motivo => ({ ok: false, motivo });
@@ -406,13 +441,13 @@ export function aplicarRespostas({ lote, resposta, mensagem, chatId, docs, retra
 
   const decisoes = { ...(lote.decisoes ?? {}) };
   const decididos = resposta.itens.filter(n => Object.hasOwn(decisoes, String(n)));
-  if (decididos.length) {
-    if (decididos.length === resposta.itens.length && decididos.every(n => decisoes[n].messageId === mensagem.message_id)) {
-      return { ok: false, jaAplicada: true, motivo: 'resposta já aplicada' };
-    }
-    return recusa(`resposta inválida: item ${decididos[0]} já decidido`);
-  }
-  const citados = resposta.itens.map(n => lote.itens[n - 1]);
+  // Repetir a mesma decisão (a pessoa reenvia "aprovo 1 a 7" depois de "aprovo 1 2 3") não derruba a resposta:
+  // os já decididos ficam como estão e só os novos são aplicados. Decisão contrária continua recusada inteira.
+  const contrario = decididos.find(n => decisoes[n].decisao !== resposta.decisao);
+  if (contrario !== undefined) return recusa(`resposta inválida: item ${contrario} já foi decidido de outro jeito`);
+  const novos = resposta.itens.filter(n => !decididos.includes(n));
+  if (!novos.length) return { ok: false, jaAplicada: true, motivo: 'resposta já aplicada' };
+  const citados = novos.map(n => lote.itens[n - 1]);
 
   // (3) e (5): cada item citado, ainda sem decisão, tem de ser o mesmo de agora.
   if (lote.tipo === 'frases') {
@@ -429,11 +464,11 @@ export function aplicarRespostas({ lote, resposta, mensagem, chatId, docs, retra
   }
 
   const em = dataLocal(mensagem.date);
-  for (const n of resposta.itens) {
+  for (const n of novos) {
     decisoes[n] = { decisao: resposta.decisao, messageId: mensagem.message_id, em, ...(resposta.decisao === 'recusada' ? { motivo: resposta.motivo } : {}) };
   }
   const novoLote = { ...structuredClone(lote), decisoes };
-  if (resposta.decisao === 'recusada') return { ok: true, lote: novoLote, gravados: [] };
+  if (resposta.decisao === 'recusada') return { ok: true, lote: novoLote, itens: novos, gravados: [] };
 
   if (lote.tipo === 'frases') {
     const frasesAprovadas = structuredClone(docs.frasesAprovadas);
@@ -448,7 +483,7 @@ export function aplicarRespostas({ lote, resposta, mensagem, chatId, docs, retra
     }
     const ids = new Set(citados.map(item => item.id));
     const frasesPendentes = { ...docs.frasesPendentes, frases: docs.frasesPendentes.frases.filter(frase => !ids.has(frase.id)) };
-    return { ok: true, lote: novoLote, frasesAprovadas, frasesPendentes, gravados };
+    return { ok: true, lote: novoLote, itens: novos, frasesAprovadas, frasesPendentes, gravados };
   }
   const [item] = citados;
   const basesAprovadas = structuredClone(docs.basesAprovadas);
@@ -458,7 +493,7 @@ export function aplicarRespostas({ lote, resposta, mensagem, chatId, docs, retra
     basesPendentes = structuredClone(docs.basesPendentes);
     delete basesPendentes.bases[item.base];
   }
-  return { ok: true, lote: novoLote, basesAprovadas, basesPendentes, gravados: [item.base] };
+  return { ok: true, lote: novoLote, itens: novos, basesAprovadas, basesPendentes, gravados: [item.base] };
 }
 
 /** Grava o que aplicarRespostas decidiu: aprovações, depois pendentes, depois o lote (temporário + rename cada um). */

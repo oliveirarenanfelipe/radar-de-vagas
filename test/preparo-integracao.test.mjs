@@ -966,18 +966,39 @@ test('23.2 o lote é o que será gravado: frases em texto puro com ascii só aba
   assert.equal(loteF.loteId, sha256(jsonCanonico(loteF.itens)).slice(0, 12));
   assert.equal(loteF.sha256, sha256(jsonCanonico({ versao: 1, tipo: 'frases', loteId: loteF.loteId, chatId: CHAT, itens: loteF.itens })));
   assert.equal(loteB.sha256, hashDoLote(loteB));
-  // Lote de base: um sendDocument só, retrato-base-a.txt, hash na 1ª linha e 41 itens entre aspas; caption = textoDoLote.
+  // Lote de base: um sendDocument só, retrato-base-a.txt organizado por seções, parte técnica e hash no fim;
+  // caption = textoDoLote.
   assert.equal(bot.documentos.length, 1);
   assert.equal(bot.pedidos.filter(pedido => pedido.metodo === 'sendMessage').length, 1);
   const [documento] = bot.documentos;
   assert.equal(documento.nome, 'retrato-base-a.txt');
   const texto = documento.bytes.toString('utf8');
   assert.equal(texto, documentoDoRetrato(retratoA()));
-  const linhasDoc = texto.split('\n').filter(Boolean);
-  assert.equal(linhasDoc[0], hashRetrato(retratoA()));
-  assert.equal(linhasDoc.length, 42);
-  assert.ok(linhasDoc.slice(1).every(linha => linha.startsWith('"')));
-  assert.ok(!linhasDoc.some(linha => linha.startsWith('{')));
+  const linhasDoc = texto.split('\n');
+  const retrato = retratoA();
+  const ordem = ['CURRÍCULO PARA APROVAR', `EXPERIÊNCIAS (${retrato.experiencias.length})`, `FORMAÇÃO (${retrato.formacao.length})`,
+    `CURSOS (${retrato.cursos.length})`, `IDIOMAS (${retrato.idiomas.length})`].map(titulo => linhasDoc.indexOf(titulo));
+  assert.ok(ordem.every((pos, i) => pos >= 0 && (i === 0 || pos > ordem[i - 1])), `seções fora de ordem: ${ordem}`);
+  const tecnica = linhasDoc.findIndex(linha => linha.startsWith('PARTE TÉCNICA'));
+  assert.ok(tecnica > ordem.at(-1));
+  for (const curso of retrato.cursos) assert.ok(linhasDoc.slice(ordem[3], ordem[4]).includes(`- ${curso}`), curso);
+  const antiga = { cargo: 'analista', empresa: 'alfa ficticia', periodo: { inicio: '2010-01', fim: '2012-01' }, local: 'brasilia', aliases: [] };
+  const recente = { ...antiga, cargo: 'gerente', empresa: 'beta ficticia', periodo: { inicio: '2020-01', fim: 'atual' } };
+  const porData = documentoDoRetrato({ ...retrato, experiencias: [antiga, recente] }).split('\n');
+  assert.ok(porData.indexOf('1. gerente — beta ficticia') > 0 && porData.indexOf('2. analista — alfa ficticia') > porData.indexOf('1. gerente — beta ficticia'));
+  const exp = retrato.experiencias.reduce((a, b) => (b.periodo.inicio > a.periodo.inicio ? b : a));
+  assert.ok(linhasDoc.includes(`1. ${exp.cargo} — ${exp.empresa}`), 'a experiência mais recente vem primeiro');
+  const iFrases = linhasDoc.findIndex(linha => linha.startsWith('FRASES DO CV'));
+  if (retrato.unidadesComSinal.length) assert.ok(iFrases > ordem.at(-1) && iFrases < tecnica, 'frases antes da parte técnica');
+  assert.ok(linhasDoc.includes(`   ${exp.periodo.inicio} – ${exp.periodo.fim} · ${exp.local}`));
+  assert.equal(linhasDoc.filter(Boolean).at(-1), `Hash do retrato: ${hashRetrato(retrato)}`);
+  assert.ok(linhasDoc.slice(tecnica).includes(`Lista de afirmações proibidas: sha256 ${retrato.proibidasSha256}`));
+  assert.ok(!linhasDoc.some(linha => linha.startsWith('"') || linha.startsWith('{')));
+  // Acento do português não gera linha ascii; letra de outro alfabeto parecida com a latina gera.
+  assert.ok(!linhasDoc.some(linha => linha.trimStart().startsWith('ascii:')));
+  const comCirilico = documentoDoRetrato({ ...retrato, cursos: ['Gestаo de Projetos'] }).split('\n');
+  const iCurso = comCirilico.indexOf('- Gestаo de Projetos');
+  assert.equal(comCirilico[iCurso + 1], '  ascii: "- Gest\\u0430o de Projetos"');
   assert.throws(() => JSON.parse(texto));
   assert.equal(documento.caption, textoDoLote(loteB));
   assert.ok(documento.caption.includes(hashRetrato(retratoA())));
@@ -1126,6 +1147,9 @@ test('23.3 só a pessoa, em conversa privada, respondendo ao lote do bot: (b) a 
   assert.ok(ignorados.every(item => typeof item.motivo === 'string' && item.motivo));
   assert.equal(ignorados.find(item => item.update_id === casos.d.update_id).motivo, 'sem resposta ao lote');
   assert.equal(ignorados.find(item => item.update_id === casos.e.update_id).motivo, NAO_E_LOTE);
+  assert.equal(ignorados.find(item => item.update_id === casos.e.update_id).respondeuA, 7);
+  assert.equal(ignorados.find(item => item.update_id === casos.d.update_id).respondeuA, undefined);
+  assert.match(r.out, /ignorada: resposta a mensagem que não é lote \(resposta à mensagem 7\)/);
   assert.equal(ignorados.find(item => item.update_id === casos.l.update_id).motivo, LOTE_MUDOU);
   const bruto = await readFile(join(env.dataDir, 'candidaturas', 'telegram-ignorados.json'), 'utf8');
   for (const proibido of ['aprovo', 'Ana', 'Outra', 'Grupo Fictício', 'Canal Fictício']) assert.ok(!bruto.includes(proibido), proibido);
@@ -1159,8 +1183,8 @@ test('23.4 gramática fechada: a resposta vale inteira ou não vale; "não 2 mot
   await responder('Aprovo  1   3');
   assert.deepEqual((await env.ler('frases-aprovadas.json')).frases.map(item => item.texto), ['Coordenei 3 squads', 'Reduzi perdas em 9%']);
   assert.deepEqual(await pendentesAgora(), ['g2']);
-  await responder('aprovo 2 3');
-  assert.match(await ultimoMotivo(), /item 3 já decidido/);
+  await responder('nao 3 mudei de ideia');
+  assert.match(await ultimoMotivo(), /item 3 já foi decidido de outro jeito/);
   assert.deepEqual(await pendentesAgora(), ['g2']);
   assert.equal((await env.ler('frases-aprovadas.json')).frases.length, 2);
   const antes = await env.bytes('frases-aprovadas.json');
@@ -1171,6 +1195,35 @@ test('23.4 gramática fechada: a resposta vale inteira ou não vale; "não 2 mot
   assert.deepEqual([lote.decisoes['1'].decisao, lote.decisoes['3'].decisao], ['aprovada', 'aprovada']);
   assert.deepEqual(await pendentesAgora(), ['g2']);
   assert.deepEqual(await env.bytes('frases-aprovadas.json'), antes);
+});
+
+test('23.4b reenviar a lista inteira depois de aprovar parte aplica só os novos, e todo resultado volta como aviso à pessoa', async t => {
+  const env = await setup(t);
+  const bot = await comTelegram(t, env);
+  await comPendentes(env, [pendente('r1', 'Coordenei 3 squads'), pendente('r2', 'Planejei 4 rotas fictícias'), pendente('r3', 'Reduzi perdas em 9%')]);
+  assert.equal((await env.tg(['pedir-aprovacao'])).code, 0);
+  const alvo = bot.enviados[0].resultado;
+  const responder = async texto => {
+    const pergunta = respostaA(bot, alvo, texto);
+    bot.atualizacoes.push(atualizacao(pergunta));
+    const r = await env.tg(['receber-aprovacao']);
+    assert.equal(r.code, 0, r.tudo);
+    const aviso = bot.enviados.at(-1).corpo;
+    assert.equal(aviso.reply_parameters.message_id, pergunta.message_id, texto);
+    assert.ok(!aviso.text.includes(texto), 'o aviso não repete o texto da pessoa');
+    return { r, aviso: aviso.text };
+  };
+  let { aviso } = await responder('aprovo 1');
+  assert.match(aviso, /^Valeu: .*o item 1\. Faltam 2 neste lote\.$/);
+  ({ aviso } = await responder('aprovo 1 2 3'));
+  assert.match(aviso, /^Valeu: .*os itens 2, 3\. Lote completo\.$/);
+  assert.deepEqual((await env.ler('frases-aprovadas.json')).frases.map(item => item.texto),
+    ['Coordenei 3 squads', 'Planejei 4 rotas fictícias', 'Reduzi perdas em 9%']);
+  ({ aviso } = await responder('aprovo 1 2 3'));
+  assert.match(aviso, /^Já estava valendo/);
+  assert.equal((await env.ler('frases-aprovadas.json')).frases.length, 3);
+  ({ aviso } = await responder('aprovo'));
+  assert.match(aviso, /^Não valeu, nada foi gravado: resposta inválida/);
 });
 
 // Lote de 3 frases enviado; devolve o que o teste precisa para mexer antes da resposta.
@@ -1489,6 +1542,30 @@ test('23.11 configurar-telegram: só no terminal; recusa webhook e pendências; 
   assert.ok(!saida.includes('5550002') && !saida.includes('5550003'));
   assert.equal(telas.filter(texto => texto.startsWith('Mensagem ignorada')).length, 2);
   assert.deepEqual(bot.enviados.at(-1).corpo, { chat_id: CHAT, text: 'radar configurado' });
+});
+
+test('23.11 configurar-telegram: Enter vazio lê o token copiado; cópia fora do formato sai 2 sem rede e sem gravar', async t => {
+  const env = await setup(t);
+  const bot = await comTelegram(t, env, { gravar: false });
+  const telas = [];
+  const io = copiado => ({ isTTY: true, perguntarSegredo: async () => '', lerAreaDeTransferencia: async () => copiado, escrever: texto => telas.push(texto) });
+  const ruim = await env.tg(['configurar-telegram'], { io: io('texto qualquer copiado') });
+  assert.equal(ruim.code, 2, ruim.tudo);
+  assert.match(ruim.tudo, /token copiado fora do formato/);
+  assert.ok(!ruim.tudo.includes('texto qualquer copiado'));
+  assert.equal(bot.pedidos.length, 0);
+  assert.equal(await env.bytes('telegram.json'), null);
+  bot.aoLer = () => {
+    if (bot.atualizacoes.length) return;
+    const codigo = /código: (\d{6})/.exec(telas.join('\n'))[1];
+    bot.atualizacoes.push(atualizacao({ message_id: ++bot.proximo, date: Math.floor(Date.now() / 1000), chat: { id: CHAT, type: 'private' },
+      from: { id: CHAT, is_bot: false, first_name: 'Fictícia' }, text: codigo }));
+  };
+  const certo = await env.tg(['configurar-telegram'], { io: io(`  ${bot.token}\r\n`) });
+  assert.equal(certo.code, 0, certo.tudo);
+  assert.deepEqual(await env.ler('telegram.json'), { token: bot.token, chatId: CHAT });
+  assert.ok(telas.includes('Token lido do que estava copiado.'));
+  assert.ok(![...telas, certo.tudo].join('\n').includes(bot.token));
 });
 
 test('23.11 configurar-telegram: 5 minutos sem o código saem 1 e nada é gravado', async t => {

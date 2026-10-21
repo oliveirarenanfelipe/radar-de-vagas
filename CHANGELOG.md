@@ -22,6 +22,10 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/). 
 
 ### Corrigido
 
+- **Reenviar a aprovação no Telegram passa a valer**: item já aprovado do mesmo jeito é pulado e os outros entram. Antes, `aprovo 1 a 7` depois de `aprovo 1 2 3` era recusado inteiro e o reenvio nunca adiantava. Decisão contrária a uma já tomada continua recusada.
+- **O bot responde a cada mensagem da pessoa**: "Valeu" (itens aplicados e quantos faltam), "Já estava valendo" ou "Não valeu" com o motivo, citando a mensagem dela. Sem o aviso, ela não tinha como saber se a aprovação tinha entrado.
+- **Resposta descartada no Telegram agora diz a qual mensagem respondia**: `receber-aprovacao` grava `respondeuA` em `telegram-ignorados.json` e mostra o número na saída. Antes, uma aprovação descartada como "não é lote" não deixava como descobrir em que mensagem a pessoa tinha respondido.
+- **Documento do lote de base legível**: o retrato vai por seções (experiências e formação da mais recente para a mais antiga, cursos, idiomas, complementos), com a parte técnica e o hash no fim.
 - **Trava do estado no Windows**: criar `estado.lock` logo depois de outro processo apagá-lo podia dar EPERM e falhar na hora (marcação pela página ou coleta agendada perdiam a vez); agora espera como trava ocupada. Trava velha que não pode ser apagada respeita o prazo de 5 s em vez de girar sem fim.
 
 ### Alterado

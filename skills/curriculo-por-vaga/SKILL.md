@@ -29,6 +29,8 @@ veracidade antes de marcar qualquer coisa como pronta. Siga esta ordem, na raiz 
    `node bin/radar.mjs pedir-aprovacao` (ou `--frase <id>` / `--base <base>`; `--previa` só mostra os lotes, sem
    enviar). A pessoa responde ao lote no Telegram dela. Depois rode `node bin/radar.mjs receber-aprovacao`, que grava
    só o que ela aprovou respondendo ao lote, e relate o que ele imprimiu. Rode `preparar` de novo depois disso.
+   Enquanto ela estiver respondendo, rode `receber-aprovacao` a cada minuto: cada rodada devolve a ela, no Telegram,
+   "Valeu", "Já estava valendo" ou "Não valeu" com o motivo, e é isso que evita a ida e volta.
    Pacote pronto: `node bin/radar.mjs avisar-vaga <id>` manda o resumo e o PDF ao Telegram dela.
 
 Regras deste caminho, sem exceção:

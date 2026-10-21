@@ -14,8 +14,9 @@
 //     sleep(ms) e agora() injetáveis (padrão: setTimeout e Date.now).
 //   cliente.quemSouEu()                         -> result do getMe ({ id, is_bot, username, ... })
 //   cliente.lerWebhook()                        -> result do getWebhookInfo ({ url, pending_update_count, ... })
-//   cliente.enviarTexto(chatId, texto)          -> result do sendMessage (a Message, com `text` e `message_id`)
-//     texto puro: nunca manda parse_mode.
+//   cliente.enviarTexto(chatId, texto, { responderA? })
+//                                               -> result do sendMessage (a Message, com `text` e `message_id`)
+//     texto puro: nunca manda parse_mode. responderA cita a mensagem (reply_parameters, sem exigir que ela exista).
 //   cliente.enviarDocumento(chatId, { nome, bytes, caption?, tipo? })
 //                                               -> result do sendDocument (a Message, com `caption` e `document`)
 //   cliente.lerAtualizacoes({ offset?, limit = 100, timeout = 0, allowedUpdates? })
@@ -222,10 +223,13 @@ export function criarClienteTelegram({
       return result;
     },
 
-    async enviarTexto(chatId, texto) {
+    async enviarTexto(chatId, texto, { responderA } = {}) {
       exigir(chatIdValido(chatId), 'enviarTexto: chatId tem de ser inteiro positivo', 'sendMessage');
       exigir(typeof texto === 'string' && texto.length > 0, 'enviarTexto: texto vazio', 'sendMessage');
-      return exigirMensagem(await chamarJson('sendMessage', { chat_id: chatId, text: texto }), 'sendMessage');
+      exigir(responderA === undefined || Number.isSafeInteger(responderA), 'enviarTexto: responderA tem de ser inteiro', 'sendMessage');
+      // A resposta citada não é obrigatória: se a mensagem da pessoa sumiu, o aviso sai solto.
+      const citacao = responderA === undefined ? {} : { reply_parameters: { message_id: responderA, allow_sending_without_reply: true } };
+      return exigirMensagem(await chamarJson('sendMessage', { chat_id: chatId, text: texto, ...citacao }), 'sendMessage');
     },
 
     async enviarDocumento(chatId, { nome, bytes, caption, tipo = 'application/octet-stream' } = {}) {
